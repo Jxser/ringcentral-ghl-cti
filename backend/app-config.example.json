@@ -1,0 +1,22 @@
+{
+  "defaults": {
+    "dispositions": [
+      "Connected",
+      "Completed",
+      "Busy",
+      "No Answer",
+      "Left Voicemail",
+      "Failed",
+      "Canceled"
+    ],
+    "ghl": {
+      "callConversationProviderId": "replace-with-call-conversation-provider-id",
+      "smsConversationProviderId": "replace-with-sms-conversation-provider-id"
+    },
+    "ringcentral": {
+      "serverUrl": "https://platform.ringcentral.com",
+      "extensionId": "~"
+    }
+  },
+  "locations": {}
+}

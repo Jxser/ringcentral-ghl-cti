@@ -1,0 +1,24 @@
+# Local secrets
+.env
+.env.*
+!*.env.example
+backend/brands.json
+backend/brands.*.json
+backend/app-config.json
+backend/app-config.*.json
+!backend/app-config.example.json
+
+# Node/runtime
+node_modules/
+npm-debug.log*
+coverage/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Deployment/runtime
+caddy_data/
+caddy_config/
+*.log

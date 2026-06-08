@@ -1,0 +1,65 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${CTI_DOMAIN}}
+      TOKEN_STORE_PATH: /data/ringcentral-tokens.json
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://*.gohighlevel.com,https://*.leadconnectorhq.com}
+      GHL_OAUTH_CLIENT_ID: ${GHL_OAUTH_CLIENT_ID:-}
+      GHL_OAUTH_CLIENT_SECRET: ${GHL_OAUTH_CLIENT_SECRET:-}
+      GHL_OAUTH_USER_TYPE: ${GHL_OAUTH_USER_TYPE:-Location}
+      GHL_BASE_URL: ${GHL_BASE_URL:-}
+      GHL_APP_ID: ${GHL_APP_ID:-}
+      GHL_APP_SHARED_SECRET: ${GHL_APP_SHARED_SECRET:-}
+      RINGCENTRAL_SERVER_URL: ${RINGCENTRAL_SERVER_URL:-https://platform.ringcentral.com}
+      RINGCENTRAL_CLIENT_ID: ${RINGCENTRAL_CLIENT_ID:-}
+      RINGCENTRAL_CLIENT_SECRET: ${RINGCENTRAL_CLIENT_SECRET:-}
+      RINGCENTRAL_EXTENSION_ID: ${RINGCENTRAL_EXTENSION_ID:-~}
+      APP_CONFIG_PATH: /run/secrets/app_config_json
+    secrets:
+      - app_config_json
+    volumes:
+      - cti_data:/data
+    networks:
+      - cti
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CTI_DOMAIN: ${CTI_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - cti
+
+secrets:
+  app_config_json:
+    file: ./backend/app-config.json
+
+volumes:
+  caddy_data:
+  caddy_config:
+  cti_data:
+
+networks:
+  cti:
+    driver: bridge

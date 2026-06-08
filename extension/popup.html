@@ -1,0 +1,69 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>RingCentral CTI Settings</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup">
+    <div class="brand">
+      <div class="logo">RC</div>
+      <div>
+        <div class="title">RingCentral CTI</div>
+        <div class="subtitle">GoHighLevel Activity Sync</div>
+      </div>
+    </div>
+
+    <div class="backend-pill">
+      <span>Backend</span>
+      <strong>cti.askroi.link</strong>
+    </div>
+
+    <section>
+      <div class="section-title">Dialer</div>
+
+      <div class="backend-pill location-pill">
+        <span>GHL user</span>
+        <strong id="activeUserLabel">Detect from GHL</strong>
+      </div>
+
+      <div class="backend-pill location-pill">
+        <span>Sub-account</span>
+        <strong id="activeLocationLabel">Detect from GHL</strong>
+      </div>
+
+      <label>Call Mode</label>
+      <select id="callMode">
+        <option value="ringout">RingOut to my phone/app</option>
+        <option value="webphone">Web Phone in browser</option>
+      </select>
+
+      <label>RingCentral Caller ID</label>
+      <select id="callerIdSelect">
+        <option value="">Manual caller ID</option>
+      </select>
+
+      <label>Manual Caller ID</label>
+      <input id="agentPhone" type="text" placeholder="+19493745710" />
+
+      <button id="openDialerBtn" class="secondary" type="button">Open Dialer</button>
+    </section>
+
+    <div class="actions">
+      <button id="saveBtn" type="button">Save</button>
+      <button id="checkSetupBtn" class="secondary" type="button">Check Setup</button>
+      <button id="connectRingCentralBtn" class="secondary" type="button">Connect RingCentral</button>
+    </div>
+
+    <div id="status"></div>
+
+    <p class="note">
+      Settings stay in this browser. GHL and RingCentral secrets stay on the backend.
+    </p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

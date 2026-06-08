@@ -1,0 +1,15 @@
+{
+  "name": "ringcentral-ghl-cti-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend adapter for logging RingCentral calls and SMS into GoHighLevel conversations.",
+  "main": "server.js",
+  "scripts": {
+    "config:doctor": "node src/config-doctor.js",
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

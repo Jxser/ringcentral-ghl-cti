@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "RingCentral GHL CTI",
+  "version": "1.0.19",
+  "description": "RingCentral calling and SMS tools for GoHighLevel with activity logging.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "contextMenus",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://*.gohighlevel.com/*",
+    "https://*.leadconnectorhq.com/*",
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "RingCentral CTI",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.gohighlevel.com/*",
+        "https://*.leadconnectorhq.com/*",
+        "https://*/*"
+      ],
+      "js": [
+        "location-utils.js",
+        "phone-utils.js",
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page-context.js",
+        "vendor/ringcentral-web-phone.umd.js"
+      ],
+      "matches": [
+        "https://*.gohighlevel.com/*",
+        "https://*.leadconnectorhq.com/*",
+        "https://*/*"
+      ]
+    }
+  ]
+}
