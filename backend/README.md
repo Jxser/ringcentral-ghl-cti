@@ -114,6 +114,22 @@ Webhook delivery:
 https://cti.example.com/webhooks/ringcentral/<ghl-location-id>
 ```
 
+## Multi-sub-account model
+
+One Marketplace app install serves many GHL sub-accounts (locations):
+
+- The agency OAuth install is exchanged for per-location tokens via `/oauth/locationToken` (driven by the app-install webhook). Each location's GHL token is stored independently.
+- Each agent's RingCentral grant is stored per `(location, GHL user id)`, so RingOut/SMS always run from the signed-in agent's own RingCentral extension.
+- The signed-in GHL user is taken from the Marketplace SSO user context, then resolved to a **location** user (via email lookup) before being attached to any activity. The raw SSO id can be an agency-level user that GHL rejects with a 422, so it is never sent as a message `userId` unless verified, and contact/conversation ownership only uses verified ids.
+- `conversationProviderId` comes from `defaults.ghl` and applies to every location unless a `locations` override is set. Use the app-level conversation provider so the same id is valid in all sub-accounts.
+
+## Reliability
+
+- **Token store** writes are serialized and written atomically (temp file + rename), so concurrent agents/locations can't clobber each other's tokens or read a half-written file.
+- **GHL tokens** refresh automatically on any `401` when a refresh token is held, and requests retry on `429` honoring `Retry-After`. GHL errors propagate their real HTTP status (e.g. a `422` reaches the extension with GHL's own message).
+- **RingCentral tokens** refresh proactively; a failed refresh (expired/rotated grant) surfaces as `ringcentral_reauth_required` so the agent is prompted to reconnect instead of the backend retrying a dead grant.
+- **Owner assignment** only fills an empty contact owner, so an outbound touch never steals a lead already owned by another agent. Assignment failures are logged rather than silently swallowed.
+
 ## Notes
 
 The Chrome extension stores user/session state, selected caller ID, and non-secret preferences. OAuth tokens and app credentials stay on the backend.

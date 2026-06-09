@@ -1,5 +1,10 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
+
+function randomSuffix() {
+  return crypto.randomBytes(6).toString("hex");
+}
 
 function storageKey(brandKey, agentKey) {
   return `${brandKey}:${String(agentKey || "").toLowerCase()}`;
@@ -24,6 +29,7 @@ function installedLocationKey(locationId) {
 class FileTokenStore {
   constructor(filePath) {
     this.filePath = filePath;
+    this._writeChain = Promise.resolve();
   }
 
   async readAll() {
@@ -38,7 +44,20 @@ class FileTokenStore {
 
   async writeAll(data) {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await fs.writeFile(this.filePath, JSON.stringify(data, null, 2), "utf8");
+    const tempPath = `${this.filePath}.${process.pid}.${randomSuffix()}.tmp`;
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
+    await fs.rename(tempPath, this.filePath);
+  }
+
+  async mutate(mutator) {
+    const run = this._writeChain.then(async () => {
+      const data = await this.readAll();
+      const result = await mutator(data);
+      await this.writeAll(data);
+      return result;
+    });
+    this._writeChain = run.then(() => {}, () => {});
+    return run;
   }
 
   async get(brandKey, agentKey) {
@@ -47,21 +66,21 @@ class FileTokenStore {
   }
 
   async set(brandKey, agentKey, tokenSet) {
-    const data = await this.readAll();
-    data[storageKey(brandKey, agentKey)] = {
-      ...tokenSet,
-      updated_at: new Date().toISOString()
-    };
-    await this.writeAll(data);
+    await this.mutate((data) => {
+      data[storageKey(brandKey, agentKey)] = {
+        ...tokenSet,
+        updated_at: new Date().toISOString()
+      };
+    });
   }
 
   async setAuthSession(authSessionId, session) {
-    const data = await this.readAll();
-    data[authSessionKey(authSessionId)] = {
-      ...session,
-      updated_at: new Date().toISOString()
-    };
-    await this.writeAll(data);
+    await this.mutate((data) => {
+      data[authSessionKey(authSessionId)] = {
+        ...session,
+        updated_at: new Date().toISOString()
+      };
+    });
   }
 
   async getAuthSession(authSessionId) {
@@ -70,12 +89,12 @@ class FileTokenStore {
   }
 
   async setGhlToken(brandKey, tokenSet) {
-    const data = await this.readAll();
-    data[ghlTokenKey(brandKey)] = {
-      ...tokenSet,
-      updated_at: new Date().toISOString()
-    };
-    await this.writeAll(data);
+    await this.mutate((data) => {
+      data[ghlTokenKey(brandKey)] = {
+        ...tokenSet,
+        updated_at: new Date().toISOString()
+      };
+    });
   }
 
   async getGhlToken(brandKey) {
@@ -84,12 +103,12 @@ class FileTokenStore {
   }
 
   async setGhlAgencyToken(companyId, tokenSet) {
-    const data = await this.readAll();
-    data[ghlAgencyTokenKey(companyId)] = {
-      ...tokenSet,
-      updated_at: new Date().toISOString()
-    };
-    await this.writeAll(data);
+    await this.mutate((data) => {
+      data[ghlAgencyTokenKey(companyId)] = {
+        ...tokenSet,
+        updated_at: new Date().toISOString()
+      };
+    });
   }
 
   async getGhlAgencyToken(companyId) {
@@ -98,13 +117,13 @@ class FileTokenStore {
   }
 
   async setInstalledLocation(locationId, location) {
-    const data = await this.readAll();
-    data[installedLocationKey(locationId)] = {
-      ...location,
-      locationId,
-      updated_at: new Date().toISOString()
-    };
-    await this.writeAll(data);
+    await this.mutate((data) => {
+      data[installedLocationKey(locationId)] = {
+        ...location,
+        locationId,
+        updated_at: new Date().toISOString()
+      };
+    });
   }
 
   async getInstalledLocation(locationId) {

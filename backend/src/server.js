@@ -97,6 +97,9 @@ function getOwnerFromHighLevelContext(config, brand, encryptedContext) {
   try {
     context = resolveHighLevelUserContext(config, encryptedContext);
   } catch (error) {
+    if (encryptedContext) {
+      console.warn(`HighLevel user context could not be decrypted (check GHL_APP_SHARED_SECRET): ${error.message}`);
+    }
     return null;
   }
   const userId = getUsableHighLevelUserId(context);
@@ -165,26 +168,32 @@ async function resolveOwnerAssignment(config, brand, requestBody, ghl) {
           return {
             assignedTo: user.id,
             source: "ghl_location_user_email_lookup",
+            verified: true,
             userName: user.name || [user.firstName, user.lastName].filter(Boolean).join(" ") || context.userName,
             email: user.email || context.email,
             contextUserId: context.userId
           };
         }
-      } catch (error) {}
+      } catch (error) {
+        console.warn(`GHL location user lookup failed for ${context.email}: ${error.message}`);
+      }
     }
 
     return {
       assignedTo: context.userId,
       source: "highlevel_user_context",
+      verified: false,
       userName: context.userName,
-      email: context.email
+      email: context.email,
+      contextUserId: context.userId
     };
   }
 
   const mappedUserId = getOwnerFromAgentProfile(brand, requestBody?.agentKey);
   if (mappedUserId) return {
     assignedTo: mappedUserId,
-    source: "brand_agent_mapping"
+    source: "brand_agent_mapping",
+    verified: true
   };
 
   if (ghl?.findUserByEmail && String(requestBody?.agentKey || "").includes("@")) {
@@ -194,17 +203,24 @@ async function resolveOwnerAssignment(config, brand, requestBody, ghl) {
         return {
           assignedTo: user.id,
           source: "ghl_user_email_lookup",
+          verified: true,
           userName: user.name || [user.firstName, user.lastName].filter(Boolean).join(" "),
           email: user.email || requestBody.agentKey
         };
       }
-    } catch (error) {}
+    } catch (error) {
+      console.warn(`GHL user lookup failed for ${requestBody.agentKey}: ${error.message}`);
+    }
   }
 
   return null;
 }
 
-async function assignGhlOwner(ghl, { contactId, conversationId, assignment }) {
+function verifiedActorUserId(ownerAssignment) {
+  return ownerAssignment?.verified ? ownerAssignment.assignedTo : "";
+}
+
+async function assignGhlOwner(ghl, { contactId, conversationId, assignment, currentContactOwnerId }) {
   if (!assignment?.assignedTo) return null;
 
   const summary = {
@@ -212,15 +228,22 @@ async function assignGhlOwner(ghl, { contactId, conversationId, assignment }) {
     source: assignment.source,
     contactAssigned: false,
     conversationAssigned: false,
+    contactOwnerPreserved: false,
     errors: []
   };
 
   if (contactId && ghl.assignContactOwner) {
-    try {
-      await ghl.assignContactOwner(contactId, assignment.assignedTo);
-      summary.contactAssigned = true;
-    } catch (error) {
-      summary.errors.push(error.message);
+    const ownedByAnotherUser = currentContactOwnerId && currentContactOwnerId !== assignment.assignedTo;
+    if (ownedByAnotherUser) {
+      summary.contactOwnerPreserved = true;
+    } else {
+      try {
+        await ghl.assignContactOwner(contactId, assignment.assignedTo);
+        summary.contactAssigned = true;
+      } catch (error) {
+        console.warn(`GHL contact owner assignment failed for ${assignment.assignedTo}: ${error.message}`);
+        summary.errors.push(error.message);
+      }
     }
   }
 
@@ -229,6 +252,7 @@ async function assignGhlOwner(ghl, { contactId, conversationId, assignment }) {
       await ghl.assignConversationOwner(conversationId, assignment.assignedTo);
       summary.conversationAssigned = true;
     } catch (error) {
+      console.warn(`GHL conversation owner assignment failed for ${assignment.assignedTo}: ${error.message}`);
       summary.errors.push(error.message);
     }
   }
@@ -319,6 +343,7 @@ function getHighLevelContext(config, encryptedContext) {
   try {
     return resolveHighLevelUserContext(config, encryptedContext);
   } catch (error) {
+    console.warn(`HighLevel user context could not be decrypted (check GHL_APP_SHARED_SECRET): ${error.message}`);
     return null;
   }
 }
@@ -886,14 +911,14 @@ function createApp({
       const ghl = await resolveGhlClient(brand, brand.key);
       const contact = await findContactOrThrow(ghl, request.body.phone);
       const ownerAssignment = await resolveOwnerAssignment(config, brand, request.body, ghl);
+      const actorUserId = verifiedActorUserId(ownerAssignment);
       const result = await ghl.addOutboundCall({
         contactId: contact.id,
         conversationProviderId: getProviderId(brand, "Call"),
         to: request.body.phone,
         from: request.body.agentPhone,
         agentName: request.body.agentName || agentIdentity.userName,
-        ...(agentIdentity.userId || ownerAssignment?.assignedTo ? { userId: agentIdentity.userId || ownerAssignment.assignedTo } : {}),
-        ...(ownerAssignment?.assignedTo ? { assignedTo: ownerAssignment.assignedTo } : {}),
+        ...(actorUserId ? { userId: actorUserId } : {}),
         callId: request.body.ringcentralRingoutId || request.body.ctiCallId,
         pageUrl: request.body.pageUrl,
         disposition: request.body.disposition,
@@ -904,7 +929,8 @@ function createApp({
       const ownerAssignmentResult = await assignGhlOwner(ghl, {
         contactId: contact.id,
         conversationId: getConversationIdFromResult(result),
-        assignment: ownerAssignment
+        assignment: ownerAssignment,
+        currentContactOwnerId: contact.assignedTo
       });
       return jsonResponse(200, {
         messageId: result.id || result.messageId || null,
@@ -928,6 +954,7 @@ function createApp({
       const rc = await resolveRingCentralClientForAgent(brand, brand.key, agentIdentity.agentKey);
       const ghl = await resolveGhlClient(brand, brand.key);
       const ownerAssignment = await resolveOwnerAssignment(config, brand, request.body, ghl);
+      const actorUserId = verifiedActorUserId(ownerAssignment);
       const sms = await rc.sendSms({
         to: request.body.to,
         from: request.body.from,
@@ -943,15 +970,15 @@ function createApp({
         to: request.body.to,
         message: request.body.message,
         agentName: request.body.agentName || agentIdentity.userName,
-        ...(agentIdentity.userId || ownerAssignment?.assignedTo ? { userId: agentIdentity.userId || ownerAssignment.assignedTo } : {}),
-        ...(ownerAssignment?.assignedTo ? { assignedTo: ownerAssignment.assignedTo } : {}),
+        ...(actorUserId ? { userId: actorUserId } : {}),
         sourceId: sms.id || sms.messageId,
         occurredAt: request.body.createdAt || new Date().toISOString()
       });
       const ownerAssignmentResult = await assignGhlOwner(ghl, {
         contactId: contact.id,
         conversationId: getConversationIdFromResult(ghlMessage),
-        assignment: ownerAssignment
+        assignment: ownerAssignment,
+        currentContactOwnerId: contact.assignedTo
       });
       return jsonResponse(200, {
         ringcentralMessageId: sms.id || sms.messageId || null,

@@ -355,7 +355,7 @@ async function backendRequest(settings, path, payload) {
     if (data.error === "missing_agent_session" || data.error === "invalid_agent_session") {
       throw new Error("Agent session is not ready. If you just connected RingCentral, try again once. Otherwise open the extension popup and reconnect RingCentral.");
     }
-    if (data.error === "ringcentral_not_connected") {
+    if (data.error === "ringcentral_not_connected" || data.error === "ringcentral_reauth_required") {
       throw new Error("RingCentral is not connected for this agent. Open the extension popup and click Connect RingCentral.");
     }
     throw new Error(data.message || data.error || "Backend request failed");

@@ -79,6 +79,25 @@ test("FileTokenStore saves and loads HighLevel agency tokens by company", async 
   assert.equal(missing, null);
 });
 
+test("FileTokenStore serializes concurrent writes without losing data", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cti-token-store-"));
+  const store = new FileTokenStore(path.join(dir, "tokens.json"));
+
+  await Promise.all([
+    store.set("brand-a", "agent-1", { access_token: "a1" }),
+    store.set("brand-a", "agent-2", { access_token: "a2" }),
+    store.setGhlToken("brand-a", { access_token: "g1" }),
+    store.setGhlAgencyToken("company-1", { access_token: "agency-1" }),
+    store.setInstalledLocation("loc-1", { name: "Ault" })
+  ]);
+
+  assert.equal((await store.get("brand-a", "agent-1")).access_token, "a1");
+  assert.equal((await store.get("brand-a", "agent-2")).access_token, "a2");
+  assert.equal((await store.getGhlToken("brand-a")).access_token, "g1");
+  assert.equal((await store.getGhlAgencyToken("company-1")).access_token, "agency-1");
+  assert.equal((await store.getInstalledLocation("loc-1")).name, "Ault");
+});
+
 test("FileTokenStore saves and loads installed HighLevel locations", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cti-token-store-"));
   const store = new FileTokenStore(path.join(dir, "tokens.json"));

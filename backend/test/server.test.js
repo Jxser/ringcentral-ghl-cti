@@ -335,14 +335,14 @@ test("assigns GHL owner from brand agent mapping when logging a call disposition
   assert.equal(response.body.messageId, "message-1");
   assert.equal(response.body.ownerAssignment.assignedTo, "user-1");
   assert.equal(outboundPayload.userId, "user-1");
-  assert.equal(outboundPayload.assignedTo, "user-1");
+  assert.equal(Object.hasOwn(outboundPayload, "assignedTo"), false);
   assert.deepEqual(calls, [
     ["assign-contact", "contact-1", "user-1"],
     ["assign-conversation", "conversation-1", "user-1"]
   ]);
 });
 
-test("uses matching location user for assignedTo while preserving context user as call actor", async () => {
+test("attributes the call to the resolved location user, not the agency context id", async () => {
   const token = encryptHighLevelContext({
     userId: "agency-user-1",
     userName: "Ryan Agency",
@@ -407,14 +407,79 @@ test("uses matching location user for assignedTo while preserving context user a
   }, { "x-cti-agent-session": "session-1" });
 
   assert.equal(response.status, 200);
-  assert.equal(outboundPayload.userId, "agency-user-1");
-  assert.equal(outboundPayload.assignedTo, "location-user-1");
+  assert.equal(outboundPayload.userId, "location-user-1");
+  assert.equal(Object.hasOwn(outboundPayload, "assignedTo"), false);
   assert.equal(response.body.ownerAssignment.assignedTo, "location-user-1");
   assert.equal(response.body.ownerAssignment.source, "ghl_location_user_email_lookup");
   assert.deepEqual(calls, [
     ["find-user", "ryan@example.com"],
     ["assign-contact", "contact-1", "location-user-1"],
     ["assign-conversation", "conversation-1", "location-user-1"]
+  ]);
+});
+
+test("omits userId from the call message when the signed-in user is not a verified location user", async () => {
+  const token = encryptHighLevelContext({
+    userId: "agency-user-1",
+    userName: "Ryan Agency",
+    email: "ryan@example.com",
+    type: "agency",
+    activeLocation: "loc-1"
+  }, "shared-secret-1");
+  const calls = [];
+  let outboundPayload = null;
+  const app = createApp({
+    config: {
+      ghlApp: {
+        id: "app-1",
+        sharedSecret: "shared-secret-1"
+      },
+      defaults: {
+        ghl: {},
+        ringcentral: {}
+      },
+      locationOverrides: {
+        "loc-1": { name: "Ault" }
+      },
+      brands: []
+    },
+    tokenStore: {
+      get: async () => ({ access_token: "access-1", agent_session_token: "session-1" }),
+      set: async () => {}
+    },
+    createGhlClient: () => ({
+      findContactByPhone: async () => ({ id: "contact-1" }),
+      findUserByEmail: async () => null,
+      addOutboundCall: async (payload) => {
+        outboundPayload = payload;
+        return { id: "message-1", conversationId: "conversation-1" };
+      },
+      assignContactOwner: async (contactId, assignedTo) => {
+        calls.push(["assign-contact", contactId, assignedTo]);
+        return { contact: { id: contactId, assignedTo } };
+      },
+      assignConversationOwner: async (conversationId, assignedTo) => {
+        calls.push(["assign-conversation", conversationId, assignedTo]);
+        return { id: conversationId, assignedTo };
+      }
+    })
+  });
+
+  const response = await request(app, "POST", "/api/extension/calls/disposition", {
+    locationId: "loc-1",
+    ghlUserContextToken: token,
+    phone: "+19493745710",
+    agentPhone: "+15555550100",
+    disposition: "Connected"
+  }, { "x-cti-agent-session": "session-1" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.messageId, "message-1");
+  assert.equal(Object.hasOwn(outboundPayload, "userId"), false);
+  assert.equal(response.body.ownerAssignment.assignedTo, "agency-user-1");
+  assert.deepEqual(calls, [
+    ["assign-contact", "contact-1", "agency-user-1"],
+    ["assign-conversation", "conversation-1", "agency-user-1"]
   ]);
 });
 
@@ -463,7 +528,55 @@ test("passes resolved GHL user into outbound SMS activity creation", async () =>
 
   assert.equal(response.status, 200);
   assert.equal(smsPayload.userId, "user-1");
-  assert.equal(smsPayload.assignedTo, "user-1");
+  assert.equal(Object.hasOwn(smsPayload, "assignedTo"), false);
+});
+
+test("preserves an existing contact owner instead of reassigning to the caller", async () => {
+  const calls = [];
+  const app = createApp({
+    config: {
+      brands: [{
+        key: "brand-a",
+        ghl: {},
+        ringcentral: {},
+        agents: {
+          "agent@example.com": { ghlUserId: "user-1" }
+        }
+      }]
+    },
+    tokenStore: {
+      get: async () => ({ access_token: "access-1", agent_session_token: "session-1" }),
+      set: async () => {}
+    },
+    createGhlClient: () => ({
+      findContactByPhone: async () => ({ id: "contact-1", assignedTo: "another-agent" }),
+      addOutboundCall: async () => ({ id: "message-1", conversationId: "conversation-1" }),
+      assignContactOwner: async (contactId, assignedTo) => {
+        calls.push(["assign-contact", contactId, assignedTo]);
+        return { contact: { id: contactId, assignedTo } };
+      },
+      assignConversationOwner: async (conversationId, assignedTo) => {
+        calls.push(["assign-conversation", conversationId, assignedTo]);
+        return { id: conversationId, assignedTo };
+      }
+    })
+  });
+
+  const response = await request(app, "POST", "/api/extension/calls/disposition", {
+    brandKey: "brand-a",
+    phone: "+19493745710",
+    agentPhone: "+15555550100",
+    agentName: "Ryan",
+    agentKey: "agent@example.com",
+    disposition: "Connected"
+  }, { "x-cti-agent-session": "session-1" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ownerAssignment.contactOwnerPreserved, true);
+  assert.equal(response.body.ownerAssignment.contactAssigned, false);
+  assert.deepEqual(calls, [
+    ["assign-conversation", "conversation-1", "user-1"]
+  ]);
 });
 
 test("keeps call logging successful when GHL owner assignment fails", async () => {

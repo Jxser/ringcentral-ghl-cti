@@ -63,7 +63,6 @@ function buildExternalOutboundCallPayload(input) {
     conversationId: input.conversationId,
     conversationProviderId: input.conversationProviderId,
     userId: input.userId,
-    assignedTo: input.assignedTo,
     date: input.occurredAt || new Date().toISOString(),
     sourceId: input.callId,
     message: formatCallMessage(input),
@@ -96,7 +95,6 @@ function buildInboundMessagePayload(input) {
     conversationId: input.conversationId,
     conversationProviderId: input.conversationProviderId,
     userId: input.userId,
-    assignedTo: input.assignedTo,
     date: input.occurredAt || new Date().toISOString(),
     sourceId: input.sourceId,
     message: input.message || "RingCentral activity",
@@ -113,8 +111,15 @@ function buildInboundMessagePayload(input) {
   });
 }
 
-function isExpiredTokenError(status, detail) {
-  return status === 401 && /expired|invalid jwt|invalid token|token is invalid/i.test(String(detail || ""));
+function retryAfterMs(response, fallbackMs) {
+  const header = response.headers?.get?.("retry-after");
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  return fallbackMs;
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function userHasLocation(user, locationId) {
@@ -139,7 +144,10 @@ class GhlClient {
     version = DEFAULT_GHL_VERSION,
     fetchImpl = fetch,
     refreshToken,
-    onTokenSet
+    onTokenSet,
+    sleep = defaultSleep,
+    maxRateLimitRetries = 2,
+    rateLimitBackoffMs = 1000
   }) {
     this.tokenSet = tokenSet || null;
     this.locationId = locationId;
@@ -148,6 +156,13 @@ class GhlClient {
     this.fetchImpl = fetchImpl;
     this.refreshToken = refreshToken;
     this.onTokenSet = onTokenSet;
+    this.sleep = sleep;
+    this.maxRateLimitRetries = maxRateLimitRetries;
+    this.rateLimitBackoffMs = rateLimitBackoffMs;
+  }
+
+  canRefreshToken() {
+    return Boolean(this.refreshToken && this.tokenSet?.refresh_token);
   }
 
   headers(extra = {}) {
@@ -163,10 +178,13 @@ class GhlClient {
   }
 
   async request(path, options = {}) {
-    return this.requestWithRetry(path, options, true);
+    return this.requestWithRetry(path, options, {
+      canRefresh: true,
+      rateLimitRetries: this.maxRateLimitRetries
+    });
   }
 
-  async requestWithRetry(path, options = {}, canRefresh) {
+  async requestWithRetry(path, options = {}, state) {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       ...options,
       headers: this.headers(options.headers || {})
@@ -179,16 +197,24 @@ class GhlClient {
       body = null;
     }
 
-    if (!response.ok) {
-      const detail = body?.message || body?.error || response.statusText || "GHL request failed";
-      if (canRefresh && isExpiredTokenError(response.status, detail)) {
-        await this.refreshAccessToken();
-        return this.requestWithRetry(path, options, false);
-      }
-      throw new Error(`GHL ${response.status}: ${detail}`);
+    if (response.ok) return body;
+
+    const detail = body?.message || body?.error || response.statusText || "GHL request failed";
+
+    if (state.canRefresh && response.status === 401 && this.canRefreshToken()) {
+      await this.refreshAccessToken();
+      return this.requestWithRetry(path, options, { ...state, canRefresh: false });
     }
 
-    return body;
+    if (response.status === 429 && state.rateLimitRetries > 0) {
+      await this.sleep(retryAfterMs(response, this.rateLimitBackoffMs));
+      return this.requestWithRetry(path, options, { ...state, rateLimitRetries: state.rateLimitRetries - 1 });
+    }
+
+    const error = new Error(`GHL ${response.status}: ${Array.isArray(detail) ? detail.join(", ") : detail}`);
+    error.status = response.status;
+    error.code = "ghl_request_error";
+    throw error;
   }
 
   async refreshAccessToken() {

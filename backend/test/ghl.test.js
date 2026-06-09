@@ -33,7 +33,7 @@ test("buildExternalOutboundCallPayload includes outbound call metadata", () => {
   assert.equal(payload.call.recordingUrl, "https://recordings.example/call.mp3");
   assert.deepEqual(payload.attachments, ["https://recordings.example/call.mp3"]);
   assert.equal(payload.userId, "user-1");
-  assert.equal(payload.assignedTo, "user-1");
+  assert.equal(Object.hasOwn(payload, "assignedTo"), false);
   assert.equal(payload.call.status, "answered");
   assert.match(payload.message, /Connected/);
   assert.match(payload.message, /Good call/);
@@ -99,7 +99,6 @@ test("buildInboundMessagePayload includes inbound SMS metadata", () => {
     to: "+15555550100",
     message: "Hello",
     userId: "user-1",
-    assignedTo: "user-1",
     occurredAt: "2026-06-02T12:00:00.000Z",
     sourceId: "sms-1"
   });
@@ -109,7 +108,7 @@ test("buildInboundMessagePayload includes inbound SMS metadata", () => {
   assert.equal(payload.contactId, "contact-1");
   assert.equal(payload.message, "Hello");
   assert.equal(payload.userId, "user-1");
-  assert.equal(payload.assignedTo, "user-1");
+  assert.equal(Object.hasOwn(payload, "assignedTo"), false);
   assert.equal(payload.sourceId, "sms-1");
 });
 
@@ -270,6 +269,85 @@ test("GhlClient prefers account location user over agency user with the same ema
   const user = await client.findUserByEmail("agent@example.com");
 
   assert.equal(user.id, "location-user-1");
+});
+
+test("GhlClient refreshes on a generic 401 when a refresh token is present", async () => {
+  const authHeaders = [];
+  const client = new GhlClient({
+    locationId: "loc-1",
+    tokenSet: { access_token: "old-access", refresh_token: "refresh-1" },
+    refreshToken: async () => ({ access_token: "new-access", refresh_token: "refresh-2" }),
+    onTokenSet: async () => {},
+    fetchImpl: async (url, options) => {
+      authHeaders.push(options.headers.Authorization);
+      if (authHeaders.length === 1) {
+        return {
+          ok: false,
+          status: 401,
+          statusText: "Unauthorized",
+          json: async () => ({ message: "Unauthorized" })
+        };
+      }
+      return { ok: true, json: async () => ({ contact: { id: "contact-1" } }) };
+    }
+  });
+
+  const contact = await client.findContactByPhone("+19493745710");
+
+  assert.equal(contact.id, "contact-1");
+  assert.deepEqual(authHeaders, ["Bearer old-access", "Bearer new-access"]);
+});
+
+test("GhlClient retries on 429 honoring Retry-After then succeeds", async () => {
+  const sleeps = [];
+  let calls = 0;
+  const client = new GhlClient({
+    locationId: "loc-1",
+    tokenSet: { access_token: "token" },
+    sleep: async (ms) => { sleeps.push(ms); },
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          ok: false,
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: { get: (header) => (header === "retry-after" ? "2" : null) },
+          json: async () => ({ message: "rate limited" })
+        };
+      }
+      return { ok: true, json: async () => ({ contact: { id: "contact-1" } }) };
+    }
+  });
+
+  const contact = await client.findContactByPhone("+19493745710");
+
+  assert.equal(contact.id, "contact-1");
+  assert.equal(calls, 2);
+  assert.deepEqual(sleeps, [2000]);
+});
+
+test("GhlClient surfaces the HTTP status on request errors", async () => {
+  const client = new GhlClient({
+    locationId: "loc-1",
+    tokenSet: { access_token: "token" },
+    fetchImpl: async () => ({
+      ok: false,
+      status: 422,
+      statusText: "Unprocessable Entity",
+      json: async () => ({ message: "conversationProviderId is invalid" })
+    })
+  });
+
+  await assert.rejects(
+    () => client.addOutboundCall({ contactId: "contact-1", conversationProviderId: "provider-1", to: "+19493745710", from: "+15555550100" }),
+    (error) => {
+      assert.equal(error.status, 422);
+      assert.equal(error.code, "ghl_request_error");
+      assert.match(error.message, /conversationProviderId is invalid/);
+      return true;
+    }
+  );
 });
 
 test("GhlClient refreshes expired HighLevel OAuth token and retries request", async () => {

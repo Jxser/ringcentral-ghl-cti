@@ -6,6 +6,13 @@ function basicAuth(clientId, clientSecret) {
   return Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 }
 
+function reauthRequiredError(message) {
+  const error = new Error(message);
+  error.status = 401;
+  error.code = "ringcentral_reauth_required";
+  return error;
+}
+
 function normalizeTokenSet(payload) {
   return {
     ...payload,
@@ -87,7 +94,7 @@ class RingCentralClient {
 
   async refreshAccessToken() {
     if (!this.tokenSet?.refresh_token) {
-      throw new Error("RingCentral agent is not connected");
+      throw reauthRequiredError("RingCentral agent is not connected. Reconnect RingCentral from the extension popup.");
     }
 
     const response = await this.fetchImpl(`${this.serverUrl}/restapi/oauth/token`, {
@@ -104,7 +111,8 @@ class RingCentralClient {
     const payload = await response.json();
 
     if (!response.ok) {
-      throw new Error(`RingCentral refresh ${response.status}: ${payload.error_description || payload.error || "failed"}`);
+      const detail = payload.error_description || payload.error || "failed";
+      throw reauthRequiredError(`RingCentral session expired. Reconnect RingCentral from the extension popup. (${detail})`);
     }
 
     this.tokenSet = {

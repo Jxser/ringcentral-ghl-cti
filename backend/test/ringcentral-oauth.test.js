@@ -7,6 +7,45 @@ const {
   exchangeAuthorizationCode
 } = require("../src/ringcentral");
 
+test("RingCentralClient surfaces a reauth-required error when refresh fails", async () => {
+  const client = new RingCentralClient({
+    clientId: "client-1",
+    clientSecret: "secret-1",
+    tokenSet: { access_token: "old", refresh_token: "dead-refresh", expires_at: 0 },
+    fetchImpl: async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: "invalid_grant", error_description: "Token expired" })
+    })
+  });
+
+  await assert.rejects(
+    () => client.startRingOut({ phone: "+19493745710", agentPhone: "+15555550100" }),
+    (error) => {
+      assert.equal(error.code, "ringcentral_reauth_required");
+      assert.equal(error.status, 401);
+      return true;
+    }
+  );
+});
+
+test("RingCentralClient requires reconnect when no refresh token is stored", async () => {
+  const client = new RingCentralClient({
+    clientId: "client-1",
+    clientSecret: "secret-1",
+    tokenSet: { access_token: "old", expires_at: 0 }
+  });
+
+  await assert.rejects(
+    () => client.startRingOut({ phone: "+19493745710", agentPhone: "+15555550100" }),
+    (error) => {
+      assert.equal(error.code, "ringcentral_reauth_required");
+      assert.equal(error.status, 401);
+      return true;
+    }
+  );
+});
+
 test("buildAuthorizationUrl creates RingCentral OAuth authorize URL", () => {
   const url = buildAuthorizationUrl({
     serverUrl: "https://platform.ringcentral.com",
