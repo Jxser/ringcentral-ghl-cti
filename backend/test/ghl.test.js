@@ -235,9 +235,44 @@ test("GhlClient finds a location user by email", async () => {
   const user = await client.findUserByEmail("agent@example.com", { companyId: "company-1" });
 
   assert.equal(user.id, "user-2");
-  assert.match(requests[0].url, /\/users\/search\?/);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /\/users\/\?/);
   assert.match(requests[0].url, /locationId=loc-1/);
-  assert.match(requests[0].url, /companyId=company-1/);
+  assert.equal(requests[0].options.headers.Version, "2021-07-28");
+});
+
+test("GhlClient falls back to company-wide user search when the location user listing fails", async () => {
+  const requests = [];
+  const client = new GhlClient({
+    tokenSet: { access_token: "token" },
+    locationId: "loc-1",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.includes("/users/?")) {
+        return {
+          ok: false,
+          status: 403,
+          statusText: "Forbidden",
+          json: async () => ({ message: "Forbidden" })
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          users: [{ id: "user-2", email: "agent@example.com" }]
+        })
+      };
+    }
+  });
+
+  const user = await client.findUserByEmail("agent@example.com", { companyId: "company-1" });
+
+  assert.equal(user.id, "user-2");
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].url, /\/users\/search\?/);
+  assert.match(requests[1].url, /companyId=company-1/);
+  assert.match(requests[1].url, /locationId=loc-1/);
+  assert.equal(requests[1].options.headers.Version, "2021-07-28");
 });
 
 test("GhlClient prefers account location user over agency user with the same email", async () => {

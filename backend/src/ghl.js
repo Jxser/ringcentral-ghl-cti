@@ -2,6 +2,7 @@ const { normalizePhone } = require("./phone");
 
 const DEFAULT_GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const DEFAULT_GHL_VERSION = "2023-02-21";
+const USERS_API_VERSION = "2021-07-28";
 
 function compact(value) {
   if (Array.isArray(value)) return value.filter((item) => item !== undefined && item !== null && item !== "");
@@ -246,12 +247,31 @@ class GhlClient {
     const locationId = options.locationId || this.locationId;
     if (!normalizedEmail || !locationId) return null;
 
-    const params = new URLSearchParams({ locationId });
-    if (options.companyId) params.set("companyId", options.companyId);
-    const body = await this.request(`/users/search?${params.toString()}`, { method: "GET" });
-    const users = Array.isArray(body.users) ? body.users : [];
-    const matches = users.filter((user) => String(user.email || "").trim().toLowerCase() === normalizedEmail);
-    return matches.sort((left, right) => userMatchRank(right, locationId) - userMatchRank(left, locationId))[0] || null;
+    const matchByEmail = (body) => {
+      const users = Array.isArray(body?.users) ? body.users : Array.isArray(body) ? body : [];
+      const matches = users.filter((user) => String(user.email || "").trim().toLowerCase() === normalizedEmail);
+      return matches.sort((left, right) => userMatchRank(right, locationId) - userMatchRank(left, locationId))[0] || null;
+    };
+
+    try {
+      const params = new URLSearchParams({ locationId });
+      const body = await this.request(`/users/?${params.toString()}`, {
+        method: "GET",
+        headers: { Version: USERS_API_VERSION }
+      });
+      const user = matchByEmail(body);
+      if (user) return user;
+      if (!options.companyId) return null;
+    } catch (error) {
+      if (!options.companyId) throw error;
+    }
+
+    const params = new URLSearchParams({ companyId: options.companyId, locationId });
+    const body = await this.request(`/users/search?${params.toString()}`, {
+      method: "GET",
+      headers: { Version: USERS_API_VERSION }
+    });
+    return matchByEmail(body);
   }
 
   async addOutboundCall(input) {

@@ -941,7 +941,8 @@ function createApp({
               source: ownerAssignment.source,
               userId: ownerAssignment.assignedTo,
               userName: ownerAssignment.userName || "",
-              email: ownerAssignment.email || ""
+              email: ownerAssignment.email || "",
+              verified: Boolean(ownerAssignment.verified)
             }
           : null
       }, cors);
@@ -990,7 +991,8 @@ function createApp({
               source: ownerAssignment.source,
               userId: ownerAssignment.assignedTo,
               userName: ownerAssignment.userName || "",
-              email: ownerAssignment.email || ""
+              email: ownerAssignment.email || "",
+              verified: Boolean(ownerAssignment.verified)
             }
           : null
       }, cors);

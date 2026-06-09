@@ -213,8 +213,9 @@ function requestHighLevelSessionDetails(appId) {
 }
 
 async function getHighLevelUserContextToken(settings, options = {}) {
-  if (!options.force && highLevelContextCache.token && highLevelContextCache.expiresAt > Date.now()) {
-    return highLevelContextCache.token;
+  if (highLevelContextCache.expiresAt > Date.now()) {
+    if (!highLevelContextCache.token) return "";
+    if (!options.force) return highLevelContextCache.token;
   }
 
   try {
@@ -229,8 +230,9 @@ async function getHighLevelUserContextToken(settings, options = {}) {
     };
     return token;
   } catch (error) {
-    highLevelContextCache = { token: "", expiresAt: 0 };
-    throw new Error(`${error.message} Confirm the HighLevel Marketplace app id, shared secret, and sub-account install.`);
+    highLevelContextCache = { token: "", expiresAt: Date.now() + 60 * 1000 };
+    console.warn(`[RC-GHL] HighLevel session details unavailable: ${error.message} Falling back to URL-based location detection. Confirm the Marketplace app is installed in this sub-account if this persists.`);
+    return "";
   }
 }
 
