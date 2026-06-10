@@ -3,6 +3,7 @@ const { normalizePhone } = require("./phone");
 const DEFAULT_GHL_BASE_URL = "https://services.leadconnectorhq.com";
 const DEFAULT_GHL_VERSION = "2023-02-21";
 const USERS_API_VERSION = "2021-07-28";
+const CONVERSATIONS_API_VERSION = "2021-04-15";
 
 function compact(value) {
   if (Array.isArray(value)) return value.filter((item) => item !== undefined && item !== null && item !== "");
@@ -306,6 +307,7 @@ class GhlClient {
 
     return this.request(`/conversations/${encodeURIComponent(conversationId)}`, {
       method: "PUT",
+      headers: { Version: CONVERSATIONS_API_VERSION },
       body: JSON.stringify(compact({
         locationId: this.locationId,
         assignedTo
