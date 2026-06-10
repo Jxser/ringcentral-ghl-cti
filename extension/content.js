@@ -335,7 +335,7 @@ async function loadDispositionOptions(settings) {
 }
 
 async function backendRequest(settings, path, payload) {
-  const runtimeSettings = await bootstrapHighLevelLocation(settings, { force: true });
+  const runtimeSettings = await bootstrapHighLevelLocation(settings);
   const ghlUserContextToken = await getHighLevelUserContextToken(runtimeSettings);
   const headers = { "Content-Type": "application/json" };
   if (runtimeSettings.agentSessionToken) headers["X-CTI-Agent-Session"] = runtimeSettings.agentSessionToken;
@@ -495,12 +495,43 @@ async function showActionPopup(phone) {
   closeAllPopups();
 
   let settings = await getIntegrationSettings();
+  const hasFreshCache = locationBootstrapCache.settings && locationBootstrapCache.expiresAt > Date.now();
   let bootstrapError = "";
-  try {
-    settings = await bootstrapHighLevelLocation(settings, { force: true });
-  } catch (error) {
-    bootstrapError = error.message;
+
+  if (hasFreshCache) {
+    settings = locationBootstrapCache.settings;
+  } else {
+    const loadingPopup = document.createElement("div");
+    loadingPopup.id = "rc-ghl-action-popup";
+    loadingPopup.className = "rc-card rc-animate";
+    loadingPopup.innerHTML = `
+      ${rcLogo()}
+      <div class="rc-loading-state">
+        <div class="rc-spinner"></div>
+        <span>Connecting to GoHighLevel…</span>
+      </div>
+      <button class="rc-btn rc-btn-light" id="rc-ghl-close-btn" style="margin-top:8px">Cancel</button>
+    `;
+    document.body.appendChild(loadingPopup);
+    centerPopup(loadingPopup);
+    currentPopup = loadingPopup;
+    document.getElementById("rc-ghl-close-btn").addEventListener("click", closeAllPopups);
+
+    try {
+      settings = await bootstrapHighLevelLocation(settings);
+    } catch (error) {
+      bootstrapError = error.message;
+    }
+
+    if (currentPopup !== loadingPopup) return;
+    loadingPopup.remove();
+    currentPopup = null;
   }
+
+  _openActionPopup(phone, settings, bootstrapError);
+}
+
+function _openActionPopup(phone, settings, bootstrapError) {
   const { agentName } = settings;
   const settingsReady = hasRequiredSettings(settings);
 
@@ -896,6 +927,9 @@ async function startWebPhoneCall(phone, settings) {
     currentCallPhone = phone;
     currentAgentPhone = agentPhone;
 
+    const hangupButton = document.getElementById("rc-ghl-webphone-hangup");
+    if (hangupButton) hangupButton.disabled = false;
+
     wireWebPhoneSession(session, phone, settings);
     setCallControlStatus("Ringing contact...", "info");
   } catch (error) {
@@ -933,7 +967,7 @@ function showWebPhoneControlPopup(phone, settings) {
     <div class="rc-control-grid">
       <button class="rc-icon-btn" id="rc-ghl-webphone-mute" type="button" title="Mute">Mute</button>
       <button class="rc-icon-btn" id="rc-ghl-webphone-hold" type="button" title="Hold">Hold</button>
-      <button class="rc-icon-btn rc-danger" id="rc-ghl-webphone-hangup" type="button" title="Hang up">End</button>
+      <button class="rc-icon-btn rc-danger" id="rc-ghl-webphone-hangup" type="button" title="Hang up" disabled>End</button>
     </div>
 
     <button class="rc-btn rc-btn-success" id="rc-ghl-open-disposition">Log Disposition</button>
@@ -987,12 +1021,18 @@ function showWebPhoneControlPopup(phone, settings) {
 
   document.getElementById("rc-ghl-webphone-hangup").addEventListener("click", async () => {
     if (!currentWebPhoneSession) return;
+    const hangupButton = document.getElementById("rc-ghl-webphone-hangup");
+    if (hangupButton.disabled) return;
+    hangupButton.disabled = true;
+    hangupButton.textContent = "Ending…";
     try {
       await currentWebPhoneSession.hangup();
       stopTimer();
       setCallControlStatus("Call ended. Add disposition to log the activity.", "success");
       dispositionButton.disabled = false;
     } catch (error) {
+      hangupButton.disabled = false;
+      hangupButton.textContent = "End";
       setCallControlStatus(`Hangup failed. ${error.message}`, "error");
     }
   });
@@ -1101,6 +1141,9 @@ async function showDispositionPopup(phone, settings, ringoutId, ctiCallId) {
   });
 
   document.getElementById("rc-ghl-submit-disposition").addEventListener("click", async () => {
+    const submitButton = document.getElementById("rc-ghl-submit-disposition");
+    if (submitButton.disabled) return;
+
     const disposition = document.getElementById("rc-ghl-disposition").value;
     const notes = document.getElementById("rc-ghl-notes").value;
     callNotesDraft = notes;
@@ -1112,6 +1155,11 @@ async function showDispositionPopup(phone, settings, ringoutId, ctiCallId) {
       status.className = "rc-status error";
       return;
     }
+
+    submitButton.disabled = true;
+    submitButton.textContent = "Submitting…";
+    status.textContent = "Saving to GoHighLevel…";
+    status.className = "rc-status info";
 
     const payload = {
       ctiCallId: ctiCallId || currentCtiCallId,
@@ -1140,6 +1188,8 @@ async function showDispositionPopup(phone, settings, ringoutId, ctiCallId) {
         clearCurrentCall();
       }, 900);
     } catch (error) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Submit Disposition";
       status.textContent = `Error submitting disposition. ${error.message}`;
       status.className = "rc-status error";
     }
@@ -1244,7 +1294,7 @@ document.addEventListener("click", (event) => {
     event.target.closest("#rc-ghl-text-popup")
   ) return;
 
-  if (callControlPopup) return;
+  if (callControlPopup || dispositionPopup) return;
   if (!highLevelHostAllowed) return;
 
   const phone = extractPhoneFromClickedElement(event.target);
@@ -1310,6 +1360,47 @@ document.addEventListener("keydown", (event) => {
     clearCurrentCall();
   }
 });
+
+let phoneBadgeScanPending = false;
+
+function schedulePhoneBadgeScan() {
+  if (phoneBadgeScanPending) return;
+  phoneBadgeScanPending = true;
+  setTimeout(() => {
+    phoneBadgeScanPending = false;
+    injectPhoneBadges();
+  }, 600);
+}
+
+function injectPhoneBadges() {
+  if (!highLevelHostAllowed) return;
+
+  document.querySelectorAll('a[href^="tel:"], a[href^="TEL:"]').forEach((el) => {
+    if (el.nextElementSibling?.classList?.contains("rc-dial-badge")) return;
+    const raw = (el.getAttribute("href") || "").replace(/^tel:/i, "");
+    const phone = normalizePhone(raw);
+    if (!phone) return;
+
+    const badge = document.createElement("button");
+    badge.type = "button";
+    badge.className = "rc-dial-badge";
+    badge.title = "Call or text with RingCentral CTI";
+    badge.setAttribute("aria-label", `Call ${phone} with RingCentral`);
+    badge.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg>`;
+    badge.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showActionPopup(phone);
+    });
+    el.insertAdjacentElement("afterend", badge);
+  });
+}
+
+const rcPhoneBadgeObserver = new MutationObserver(schedulePhoneBadgeScan);
+if (document.body) {
+  rcPhoneBadgeObserver.observe(document.body, { childList: true, subtree: true });
+}
+schedulePhoneBadgeScan();
 
 window.addEventListener("beforeunload", () => {
   if (currentWebPhone?.dispose) {

@@ -203,8 +203,13 @@
   cursor: pointer;
 }
 
-.rc-icon-btn:hover {
+.rc-icon-btn:hover:not(:disabled) {
   border-color: var(--rc-blue);
+}
+
+.rc-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .rc-icon-btn.rc-danger {
@@ -349,3 +354,57 @@
 .rc-status.error { color: #B91C1C; font-weight: 700; }
 .rc-status.info { color: var(--rc-blue-dark); font-weight: 700; }
 .rc-status.warning { color: #B45309; font-weight: 700; }
+
+/* Loading spinner */
+.rc-loading-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 22px 16px;
+  color: var(--rc-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rc-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--rc-border);
+  border-top-color: var(--rc-blue);
+  border-radius: 50%;
+  animation: rc-spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes rc-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Phone dial badge injected next to tel: links */
+.rc-dial-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 5px;
+  background: var(--rc-blue);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  vertical-align: middle;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 120ms ease, transform 80ms ease;
+  line-height: 1;
+}
+
+.rc-dial-badge:hover {
+  background: var(--rc-blue-dark);
+  transform: scale(1.15);
+}
+
+.rc-dial-badge:active {
+  transform: scale(0.95);
+}
