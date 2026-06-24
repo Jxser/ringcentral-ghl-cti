@@ -15,7 +15,8 @@
 #rc-ghl-action-popup,
 #rc-ghl-call-control-popup,
 #rc-ghl-disposition-popup,
-#rc-ghl-text-popup {
+#rc-ghl-text-popup,
+#rc-ghl-power-dialer-popup {
   position: fixed;
   z-index: 2147483647;
   width: 350px;
@@ -379,6 +380,160 @@
 @keyframes rc-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── Power Dialer ─────────────────────────────────────────────────────────── */
+
+.rc-pd-summary {
+  padding: 8px 16px 4px;
+  font-size: 13px;
+  color: var(--rc-muted);
+  font-weight: 700;
+}
+
+.rc-pd-list {
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 6px 16px 0;
+  border: 1px solid var(--rc-border);
+  border-radius: 12px;
+  background: #F8FAFC;
+}
+
+.rc-pd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rc-border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.rc-pd-item:last-child { border-bottom: none; }
+.rc-pd-item:hover { background: var(--rc-blue-light); }
+
+.rc-pd-check {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: var(--rc-blue);
+}
+
+.rc-pd-num {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--rc-text);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rc-pd-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--rc-blue-dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.rc-pd-empty {
+  padding: 18px 16px;
+  text-align: center;
+  color: var(--rc-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Call disposition context pill when power dialing */
+.rc-pd-call-pill {
+  margin: 10px 16px 0;
+  background: var(--rc-blue-light);
+  border-color: #C9EAFE;
+}
+
+.rc-pd-call-pill strong {
+  color: var(--rc-blue);
+}
+
+/* Persistent HUD — floating progress indicator */
+.rc-pd-hud {
+  position: fixed;
+  bottom: 22px;
+  right: 22px;
+  z-index: 2147483646;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 13px;
+  background: var(--rc-blue-dark);
+  color: #fff;
+  border-radius: 24px;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 6px 24px rgba(0, 47, 76, 0.32);
+  font-family: Inter, Arial, Helvetica, sans-serif;
+}
+
+.rc-pd-hud-label {
+  letter-spacing: 0.01em;
+}
+
+.rc-pd-hud-progress {
+  background: rgba(255,255,255,0.16);
+  border-radius: 12px;
+  padding: 2px 9px;
+  font-size: 12px;
+}
+
+.rc-pd-hud-stop {
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.28);
+  color: #fff;
+  border-radius: 10px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 100ms ease;
+}
+
+.rc-pd-hud-stop:hover {
+  background: rgba(255,255,255,0.28);
+}
+
+/* Completion / error banners */
+.rc-pd-banner {
+  position: fixed;
+  bottom: 72px;
+  right: 22px;
+  z-index: 2147483647;
+  padding: 12px 16px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.14);
+  font-family: Inter, Arial, Helvetica, sans-serif;
+  max-width: 290px;
+  line-height: 1.35;
+}
+
+.rc-pd-banner-success {
+  background: #ECFDF5;
+  border: 1px solid #6EE7B7;
+  color: #047857;
+}
+
+.rc-pd-banner-error {
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  color: #B91C1C;
+}
+
+/* ─── End Power Dialer ───────────────────────────────────────────────────────── */
 
 /* Phone dial badge injected next to tel: links */
 .rc-dial-badge {

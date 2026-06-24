@@ -323,6 +323,20 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("checkSetupBtn").addEventListener("click", checkSetup);
   document.getElementById("openDialerBtn").addEventListener("click", openManualDialer);
 
+  document.getElementById("powerDialerBtn").addEventListener("click", async () => {
+    const button = document.getElementById("powerDialerBtn");
+    setButtonBusy(button, true, "Opening…");
+    try {
+      const response = await sendToActiveTab({ type: "rc-ghl-power-dialer" });
+      if (!response?.ok) throw new Error(response?.message || "Failed to open power dialer.");
+      window.close();
+    } catch (error) {
+      setStatus(error.message, "error");
+    } finally {
+      setButtonBusy(button, false, "Power Dial This Page");
+    }
+  });
+
   document.getElementById("connectRingCentralBtn").addEventListener("click", async () => {
     const button = document.getElementById("connectRingCentralBtn");
     setButtonBusy(button, true, "Opening...");

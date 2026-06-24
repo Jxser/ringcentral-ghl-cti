@@ -3,6 +3,10 @@ let currentPopup = null;
 let dispositionPopup = null;
 let textPopup = null;
 let callControlPopup = null;
+let powerDialerQueue = [];
+let powerDialerIndex = -1;
+let powerDialerRunning = false;
+let powerDialerHud = null;
 let lastUrl = location.href;
 let callStartedAt = null;
 let callEndedAt = null;
@@ -1096,9 +1100,19 @@ async function showDispositionPopup(phone, settings, ringoutId, ctiCallId) {
   const popup = document.createElement("div");
   popup.id = "rc-ghl-disposition-popup";
   popup.className = "rc-card rc-animate";
+  const pdEntry = powerDialerRunning ? powerDialerQueue[powerDialerIndex] : null;
+  const pdProgressPill = pdEntry
+    ? `<div class="rc-mode-pill rc-pd-call-pill">
+        <span>Power Dialer ${powerDialerIndex + 1}/${powerDialerQueue.length}</span>
+        <strong>${pdEntry.name ? escapeHtml(pdEntry.name) : escapeHtml(formatPhoneForDisplay(pdEntry.phone))}</strong>
+       </div>`
+    : "";
+
   popup.innerHTML = `
     ${rcLogo()}
     <div class="rc-section-title">Call Disposition</div>
+
+    ${pdProgressPill}
 
     <div class="rc-phone-card">
       <div class="rc-phone-number">${formatPhoneForDisplay(phone)}</div>
@@ -1176,7 +1190,10 @@ async function showDispositionPopup(phone, settings, ringoutId, ctiCallId) {
     try {
       const result = await backendRequest(settings, "/api/extension/calls/disposition", payload);
 
-      status.textContent = attributionMessage(result, "Disposition submitted.");
+      const isLastPdCall = powerDialerRunning && powerDialerIndex + 1 >= powerDialerQueue.length;
+      status.textContent = powerDialerRunning && !isLastPdCall
+        ? attributionMessage(result, "Disposition saved. Dialing next number…")
+        : attributionMessage(result, "Disposition submitted.");
       status.className = "rc-status success";
 
       setTimeout(() => {
@@ -1184,6 +1201,16 @@ async function showDispositionPopup(phone, settings, ringoutId, ctiCallId) {
         if (popup) popup.remove();
         dispositionPopup = null;
         clearCurrentCall();
+
+        if (powerDialerRunning) {
+          powerDialerIndex++;
+          if (powerDialerIndex < powerDialerQueue.length) {
+            updatePowerDialerHud();
+            setTimeout(() => dialCurrentPowerDialerEntry(), 2000);
+          } else {
+            completePowerDialer();
+          }
+        }
       }, 900);
     } catch (error) {
       submitButton.disabled = false;
@@ -1289,7 +1316,8 @@ document.addEventListener("click", (event) => {
     event.target.closest("#rc-ghl-action-popup") ||
     event.target.closest("#rc-ghl-call-control-popup") ||
     event.target.closest("#rc-ghl-disposition-popup") ||
-    event.target.closest("#rc-ghl-text-popup")
+    event.target.closest("#rc-ghl-text-popup") ||
+    event.target.closest("#rc-ghl-power-dialer-popup")
   ) return;
 
   if (callControlPopup || dispositionPopup) return;
@@ -1332,6 +1360,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "rc-ghl-power-dialer") {
+    showPowerDialerSetupPopup();
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message?.type !== "rc-ghl-open-dialer") return false;
 
   showActionPopup(extractPhoneFromText(message.phone || "") || normalizePhone(message.phone || ""));
@@ -1347,6 +1381,7 @@ setInterval(() => {
     if (!callControlPopup) {
       closeAllPopups();
       clearCurrentCall();
+      if (powerDialerRunning) stopPowerDialer();
     }
   }
 }, 500);
@@ -1359,6 +1394,251 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// ─── Power Dialer ────────────────────────────────────────────────────────────
+
+function scanPageForPhoneNumbers() {
+  const found = new Set();
+  const results = [];
+
+  function addPhone(phone, name) {
+    if (!phone || found.has(phone)) return;
+    found.add(phone);
+    results.push({ phone, name: name || "", label: formatPhoneForDisplay(phone) });
+  }
+
+  // Given a DOM node that contains a phone number, try to find the contact name
+  // from the same row (works for GHL Tabulator and similar grid layouts).
+  function nameFromRow(node) {
+    const phoneCell = node.parentElement?.closest(
+      '[tabulator-field="phone"], [data-field="phone"], td'
+    );
+    if (!phoneCell) return "";
+
+    const row = phoneCell.closest(
+      '.tabulator-row, [role="row"], tr'
+    );
+    if (!row) return "";
+
+    const nameCell = row.querySelector(
+      '[tabulator-field="name"], [tabulator-field="fullName"], ' +
+      '[tabulator-field="contactName"], [tabulator-field="firstName"], ' +
+      '[data-field="name"], [data-field="fullName"]'
+    );
+    if (!nameCell) return "";
+
+    // Grab the visible text div inside the name cell (same pattern as phone cell)
+    const visibleDiv = nameCell.querySelector('div[style*="white-space: nowrap"]');
+    const raw = ((visibleDiv || nameCell).textContent || "").trim();
+    // Sanity check: reject if it looks like a phone number itself
+    return raw && !extractPhoneFromText(raw) ? raw : "";
+  }
+
+  // Walk every visible text node — same detection logic the click handler uses.
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName?.toLowerCase() || "";
+        if (["script", "style", "noscript", "textarea", "input", "svg", "path"].includes(tag)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (parent.closest('[id^="rc-ghl-"]')) return NodeFilter.FILTER_REJECT;
+        // Skip opacity:0 elements (GHL renders hidden duplicate text for copy-to-clipboard)
+        if (parent.style?.opacity === "0") return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
+
+  let node;
+  while ((node = walker.nextNode())) {
+    const text = (node.textContent || "").trim();
+    if (!text) continue;
+    if (globalThis.RcGhlPhoneUtils?.isPhoneLikeText?.(text)) {
+      const phone = extractPhoneFromText(text);
+      if (phone) addPhone(phone, nameFromRow(node));
+    }
+  }
+
+  // Also catch explicit tel: links (other pages / third-party tools)
+  document.querySelectorAll('a[href^="tel:"], a[href^="TEL:"]').forEach((el) => {
+    if (el.closest('[id^="rc-ghl-"]')) return;
+    const phone = normalizePhone((el.getAttribute("href") || "").replace(/^tel:/i, ""));
+    const name = (el.textContent || "").trim();
+    if (phone) addPhone(phone, !extractPhoneFromText(name) ? name : "");
+  });
+
+  return results;
+}
+
+function showPowerDialerSetupPopup() {
+  closeAllPopups();
+  if (!highLevelHostAllowed) return;
+
+  const numbers = scanPageForPhoneNumbers();
+
+  const popup = document.createElement("div");
+  popup.id = "rc-ghl-power-dialer-popup";
+  popup.className = "rc-card rc-animate";
+
+  const listHtml = numbers.length
+    ? numbers.map((item, i) => `
+        <label class="rc-pd-item">
+          <input type="checkbox" class="rc-pd-check" data-index="${i}" checked />
+          <span class="rc-pd-num">
+            ${item.name ? `<span class="rc-pd-name">${escapeHtml(item.name)}</span>` : ""}
+            ${escapeHtml(formatPhoneForDisplay(item.phone))}
+          </span>
+        </label>`).join("")
+    : `<div class="rc-pd-empty">No phone numbers detected on this page.</div>`;
+
+  popup.innerHTML = `
+    ${rcLogo()}
+    <div class="rc-section-title">Power Dialer</div>
+
+    <div class="rc-pd-summary">
+      ${numbers.length} number${numbers.length !== 1 ? "s" : ""} detected on this page
+    </div>
+
+    <div class="rc-pd-list" id="rc-pd-list">${listHtml}</div>
+
+    <div class="rc-actions">
+      <button class="rc-btn rc-btn-primary" id="rc-pd-start-btn" ${!numbers.length ? "disabled" : ""}>
+        <span class="rc-btn-icon">☎</span> Start Dialing
+      </button>
+      <button class="rc-btn rc-btn-light" id="rc-pd-cancel-btn">Cancel</button>
+    </div>
+    <div class="rc-status" id="rc-pd-status"></div>
+  `;
+
+  document.body.appendChild(popup);
+  centerPopup(popup);
+  currentPopup = popup;
+
+  document.getElementById("rc-pd-cancel-btn").addEventListener("click", closeAllPopups);
+
+  document.getElementById("rc-pd-start-btn").addEventListener("click", async () => {
+    const checks = popup.querySelectorAll(".rc-pd-check:checked");
+    const queue = Array.from(checks)
+      .map((cb) => numbers[parseInt(cb.dataset.index, 10)])
+      .filter(Boolean);
+
+    if (!queue.length) {
+      const s = document.getElementById("rc-pd-status");
+      s.textContent = "Select at least one number to dial.";
+      s.className = "rc-status error";
+      return;
+    }
+
+    popup.remove();
+    currentPopup = null;
+    await startPowerDialerQueue(queue);
+  });
+}
+
+async function startPowerDialerQueue(queue) {
+  powerDialerQueue = queue;
+  powerDialerIndex = 0;
+  powerDialerRunning = true;
+  showPowerDialerHud();
+  await dialCurrentPowerDialerEntry();
+}
+
+function showPowerDialerHud() {
+  removePowerDialerHud();
+  const hud = document.createElement("div");
+  hud.id = "rc-ghl-pd-hud";
+  hud.className = "rc-pd-hud";
+  hud.innerHTML = `
+    <span class="rc-pd-hud-label">Power Dialer</span>
+    <span class="rc-pd-hud-progress" id="rc-pd-hud-progress">
+      ${powerDialerIndex + 1} / ${powerDialerQueue.length}
+    </span>
+    <button class="rc-pd-hud-stop" id="rc-pd-hud-stop" title="Stop power dialer">Stop</button>
+  `;
+  document.body.appendChild(hud);
+  powerDialerHud = hud;
+  document.getElementById("rc-pd-hud-stop").addEventListener("click", stopPowerDialer);
+}
+
+function updatePowerDialerHud() {
+  const el = document.getElementById("rc-pd-hud-progress");
+  if (el) el.textContent = `${powerDialerIndex + 1} / ${powerDialerQueue.length}`;
+}
+
+function removePowerDialerHud() {
+  if (powerDialerHud) { powerDialerHud.remove(); powerDialerHud = null; }
+  const existing = document.getElementById("rc-ghl-pd-hud");
+  if (existing) existing.remove();
+}
+
+function stopPowerDialer() {
+  powerDialerRunning = false;
+  powerDialerQueue = [];
+  powerDialerIndex = -1;
+  removePowerDialerHud();
+}
+
+async function dialCurrentPowerDialerEntry() {
+  if (!powerDialerRunning) return;
+  if (powerDialerIndex >= powerDialerQueue.length) {
+    completePowerDialer();
+    return;
+  }
+
+  updatePowerDialerHud();
+  const entry = powerDialerQueue[powerDialerIndex];
+
+  let settings = await getIntegrationSettings();
+  if (locationBootstrapCache.settings && locationBootstrapCache.expiresAt > Date.now()) {
+    settings = locationBootstrapCache.settings;
+  } else {
+    try {
+      settings = await bootstrapHighLevelLocation(settings);
+    } catch (error) {
+      stopPowerDialer();
+      showPowerDialerBanner(`Power Dialer stopped: ${error.message}`, "error");
+      return;
+    }
+  }
+
+  if (!hasRequiredSettings(settings)) {
+    stopPowerDialer();
+    showPowerDialerBanner("Settings incomplete. Open the extension popup to configure.", "error");
+    return;
+  }
+
+  callNotesDraft = "";
+  callStartedAt = null;
+  callEndedAt = null;
+  await startCall(entry.phone, settings);
+}
+
+function completePowerDialer() {
+  const count = powerDialerQueue.length;
+  powerDialerRunning = false;
+  powerDialerQueue = [];
+  powerDialerIndex = -1;
+  removePowerDialerHud();
+  showPowerDialerBanner(
+    `Power Dialer complete — ${count} call${count !== 1 ? "s" : ""} logged.`,
+    "success"
+  );
+}
+
+function showPowerDialerBanner(message, type) {
+  const banner = document.createElement("div");
+  banner.className = `rc-pd-banner rc-pd-banner-${type}`;
+  banner.textContent = message;
+  document.body.appendChild(banner);
+  setTimeout(() => banner.remove(), 5000);
+}
+
+// ─── End Power Dialer ─────────────────────────────────────────────────────────
+
 let phoneBadgeScanPending = false;
 
 function schedulePhoneBadgeScan() {
@@ -1370,27 +1650,43 @@ function schedulePhoneBadgeScan() {
   }, 600);
 }
 
+function makeBadge(phone) {
+  const badge = document.createElement("button");
+  badge.type = "button";
+  badge.className = "rc-dial-badge";
+  badge.title = "Call or text with RingCentral CTI";
+  badge.setAttribute("aria-label", `Call ${phone} with RingCentral`);
+  badge.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg>`;
+  badge.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showActionPopup(phone);
+  });
+  return badge;
+}
+
 function injectPhoneBadges() {
   if (!highLevelHostAllowed) return;
 
+  // Standard tel: links (other pages/tools)
   document.querySelectorAll('a[href^="tel:"], a[href^="TEL:"]').forEach((el) => {
     if (el.nextElementSibling?.classList?.contains("rc-dial-badge")) return;
     const raw = (el.getAttribute("href") || "").replace(/^tel:/i, "");
     const phone = normalizePhone(raw);
     if (!phone) return;
+    el.insertAdjacentElement("afterend", makeBadge(phone));
+  });
 
-    const badge = document.createElement("button");
-    badge.type = "button";
-    badge.className = "rc-dial-badge";
-    badge.title = "Call or text with RingCentral CTI";
-    badge.setAttribute("aria-label", `Call ${phone} with RingCentral`);
-    badge.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg>`;
-    badge.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      showActionPopup(phone);
-    });
-    el.insertAdjacentElement("afterend", badge);
+  // GHL Tabulator contact list cells — inject badge into the visible phone text div
+  document.querySelectorAll('[tabulator-field="phone"]').forEach((el) => {
+    if (el.closest('[id^="rc-ghl-"]')) return;
+    if (el.querySelector(".rc-dial-badge")) return;
+    const visibleDiv = el.querySelector('div[style*="white-space: nowrap"]');
+    if (!visibleDiv) return;
+    const text = visibleDiv.textContent.trim();
+    const phone = extractPhoneFromText(text);
+    if (!phone) return;
+    visibleDiv.insertAdjacentElement("afterend", makeBadge(phone));
   });
 }
 
