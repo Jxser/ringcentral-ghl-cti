@@ -842,9 +842,13 @@ function createApp({
         phone: request.body.phone,
         agentPhone: request.body.agentPhone
       });
+      // RingCentral returns `id` as the bare numeric string and `uri` as the full path.
+      // Extract the bare ID from whichever is present so status/cancel calls work correctly.
+      const rawRingoutId = ringout.id || ringout.uri || "";
+      const ringcentralRingoutId = String(rawRingoutId).replace(/^.*\/ring-out\//i, "") || null;
       return jsonResponse(200, {
         ctiCallId: null,
-        ringcentralRingoutId: ringout.id || ringout.uri || null
+        ringcentralRingoutId
       }, cors);
     }
 

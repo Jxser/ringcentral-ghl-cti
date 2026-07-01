@@ -462,6 +462,89 @@ function callModeLabel(mode) {
   return mode === "webphone" ? "Web Phone" : "RingOut";
 }
 
+// Detect GHL's native call icon button (the round phone icon in contact headers, tel: links, etc.)
+function isGhlNativeCallButton(target) {
+  if (!target) return false;
+  if (target.closest('[id^="rc-ghl-"]')) return false;
+
+  // tel: anchor — always intercept
+  if (target.closest('a[href^="tel:"], a[href^="TEL:"]')) return true;
+
+  const el = target.closest('button, [role="button"]') || target;
+  if (!el || el.tagName === "BODY" || el.tagName === "HTML") return false;
+
+  // Explicit call/phone label on the button
+  const label = [
+    el.getAttribute("aria-label"),
+    el.getAttribute("title"),
+    el.getAttribute("data-tooltip"),
+    el.getAttribute("data-original-title")
+  ].filter(Boolean).join(" ");
+  if (/\bcall\b|\bphone\b/i.test(label)) return true;
+
+  // Icon-only button (no visible text) that contains a phone-icon SVG
+  const visibleText = (el.textContent || "").trim();
+  if (!visibleText && el.querySelector("svg")) {
+    const paths = [...el.querySelectorAll("path, polyline")]
+      .map((p) => p.getAttribute("d") || "").join(" ");
+    // Common phone icon path fingerprints (Feather, Material, Heroicons, Phosphor, Lucide)
+    if (/M22 16\.9|M6\.62 10\.7|M6\.6 10\.8|M2\.25 6\.3|M3 5\.5|M17\.92 17\.6|M14\.35|M20\.01 15\.38/.test(paths)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// When clicking an icon button with no phone text, find the single phone number visible in the
+// contact detail panel. Returns "" if multiple phones are visible (can't pick confidently).
+function findContextPhone() {
+  // GHL renders phone inputs with type="tel" in the contact sidebar
+  for (const el of document.querySelectorAll('input[type="tel"]')) {
+    if (el.closest('[id^="rc-ghl-"]')) continue;
+    const phone = extractPhoneFromText((el.value || el.getAttribute("value") || "").trim());
+    if (phone) return phone;
+  }
+
+  // Explicit GHL phone field containers
+  for (const sel of ['[data-field-type="phone"]', '[field-type="phone"]', '[data-field="phone"]']) {
+    for (const el of document.querySelectorAll(sel)) {
+      if (el.closest('[id^="rc-ghl-"]')) continue;
+      const phone = extractPhoneFromText((el.value || el.textContent || "").trim());
+      if (phone) return phone;
+    }
+  }
+
+  // Walk visible text nodes, but skip large list/table containers
+  const seen = new Set();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      const tag = (parent.tagName || "").toLowerCase();
+      if (["script", "style", "svg", "path", "input", "textarea"].includes(tag)) return NodeFilter.FILTER_REJECT;
+      if (parent.closest('[id^="rc-ghl-"]')) return NodeFilter.FILTER_REJECT;
+      // Skip contact list tables — we only want the detail/form view
+      if (parent.closest('.tabulator, table, [class*="list" i]')) return NodeFilter.FILTER_REJECT;
+      if (parent.style?.opacity === "0") return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+
+  let node;
+  while ((node = walker.nextNode())) {
+    const text = (node.textContent || "").trim();
+    if (globalThis.RcGhlPhoneUtils?.isPhoneLikeText?.(text)) {
+      const phone = extractPhoneFromText(text);
+      if (phone) seen.add(phone);
+    }
+  }
+
+  // Only auto-select when exactly one phone is visible (contact detail view)
+  const phones = [...seen];
+  return phones.length === 1 ? phones[0] : "";
+}
+
 function digitsForWebPhone(phone) {
   return normalizePhone(phone).replace(/^\+/, "");
 }
@@ -1323,14 +1406,27 @@ document.addEventListener("click", (event) => {
   if (callControlPopup || dispositionPopup) return;
   if (!highLevelHostAllowed) return;
 
-  const phone = extractPhoneFromClickedElement(event.target);
+  let phone = extractPhoneFromClickedElement(event.target);
+
+  // Intercept GHL's native call icon button even when it has no phone text on it
+  if (!phone && isGhlNativeCallButton(event.target)) {
+    // tel: links carry the number in their href
+    const telLink = event.target.closest('a[href^="tel:"], a[href^="TEL:"]');
+    if (telLink) {
+      phone = normalizePhone((telLink.getAttribute("href") || "").replace(/^tel:/i, ""));
+    }
+    // For icon buttons, find the one phone visible in the contact detail panel
+    if (!phone) phone = findContextPhone();
+  }
+
   if (!phone) {
     closeAllPopups();
     return;
   }
 
+  // stopImmediatePropagation prevents GHL's own capture-phase handlers from firing too
   event.preventDefault();
-  event.stopPropagation();
+  event.stopImmediatePropagation();
   showActionPopup(phone);
 }, true);
 
